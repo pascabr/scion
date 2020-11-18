@@ -24,15 +24,13 @@ import (
     "github.com/scionproto/scion/go/lib/spath"
 )
 
+
 var (
     // not all the neccessary fields were in the E2E extension
     errExtnPathTransIncomplete = serrors.New("Incomplete Path Transport Extension")
     errExtnPathTransInexistent = serrors.New("No Path Transport Extension Found"
 )
 
-// temporary path transport extension
-// tlv option type:
-const ExtnPathTransType = 1
 
 type ExtnPathTrans struct{
     SrcIA   addr.IA
@@ -54,7 +52,7 @@ func NewExtnPathTransFromLayer(extn *EndToEndExtn, c *snet.Conn) (*ExtnPathTrans
 func (o *ExtnPathTrans) DecodeFromLayer(extn *EndToEndExtn) error{
     existance bool = false
     for option := range extn.Options {
-        if option.OptType == ExtnPathTransType{
+        if option.OptType == OptTypePathTransExtn {
             // if option.OptDataLen < 8{
             //     // not enough data for a full Path Transport Extension
             //     return errExtnPathTransIncomplete
@@ -86,6 +84,51 @@ func (o *ExtnPathTrans) DecodeFromLayer(extn *EndToEndExtn) error{
     }
     return nil
 }
+
+func (o *ExtnPathTrans) Write(location []byte) error{
+    offset := 0
+
+    hostType := addr.HostTypeNone
+    if o.SrcHost != nil{
+        // we have host addr
+        hostType = o.SrcHost.Type()
+    }
+    location[offset] = uint8(hostType)
+    offset += 1
+
+    o.SrcIA.Write(location[offset:])
+    offset += addr.IABytes
+
+    if o.SrcHost != nil{
+        srcHost := o.SrcHost.Pack()
+        copy(location[offset:],srcHost)
+        offset += len(srcHost)
+    }else{
+        offset += addr.HostLenNone
+    }
+
+    // currently no padding added after SrcAddr
+
+    if o.Path != nil {
+        copy(location[offset:],o.Path.Raw)
+    }
+    return nil
+}
+
+func (o *ExtnPathTrans) Len() int{
+    var hostLen uint8
+    if o.SrcHost != nil{
+        hostLen,_ = addr.HostLen(o.SrcHost.Type())
+    }
+
+    var pathLen int
+    if o.Path != nil{
+        pathLen = len(o.Path.Raw)
+    }
+    return len(addr.HostAddrType) + addr.IABytes + int(hostLen) + pathLen
+}
+
+func (o *ExtnPathTrans) Copy() 
 
 func (o *ExtnPathTrans) parseAddr(data []byte, srcType HostAddrType) (int,error){
     // length of src host address

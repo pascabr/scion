@@ -31,6 +31,7 @@ type OptionType uint8
 const (
 	OptTypePad1 OptionType = iota
 	OptTypePadN
+    OptTypePathTransExtn
 )
 
 type tlvOption struct {
