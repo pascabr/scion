@@ -879,6 +879,8 @@ func (p *scionPacketProcessor) updateNonConsDirIngressSegID() error {
 		if err := updateSCIONLayer(p.rawPkt, p.scionLayer, p.buffer); err != nil {
 			return err
 		}
+        // err = serrors.WrapStr("Info Update", err)
+        // log.Debug("Updated InfoField", "err", err)
 	}
 	return nil
 }
@@ -1078,10 +1080,10 @@ func (p *scionPacketProcessor) validatePktLen() (processResult, error) {
 }
 
 func (p *scionPacketProcessor) process() (processResult, error) {
-
 	if r, err := p.parsePath(); err != nil {
 		return r, err
 	}
+    fmt.Printf("Process: SegID %d -> TS %d -> ExpT %d -> ConsI %d -> ConsE %d\n",p.infoField.SegID, p.infoField.Timestamp, p.hopField.ExpTime, p.hopField.ConsIngress, p.hopField.ConsEgress)
 	if r, err := p.validatePktLen(); err != nil {
 		return r, err
 	}

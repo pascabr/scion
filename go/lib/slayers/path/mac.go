@@ -42,9 +42,10 @@ func MAC(h hash.Hash, info *InfoField, hf *HopField) []byte {
 func VerifyMAC(h hash.Hash, info *InfoField, hf *HopField) error {
 	expectedMac := MAC(h, info, hf)
 	if !bytes.Equal(hf.Mac, expectedMac) {
+        myErr := fmt.Sprintf("Info: %d -- %d, HopField: %d -- %d -- %d \n", info.SegID, info.Timestamp, hf.ExpTime, hf.ConsIngress, hf.ConsEgress)
 		return serrors.New("MAC",
 			"expected", fmt.Sprintf("%x", expectedMac),
-			"actual", fmt.Sprintf("%x", hf.Mac))
+            "actual", fmt.Sprintf("%x, %s", hf.Mac,myErr))
 	}
 	return nil
 }
