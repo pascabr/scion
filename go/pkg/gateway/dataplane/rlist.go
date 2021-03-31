@@ -19,7 +19,6 @@ import (
 	"container/list"
 	"fmt"
 
-	"github.com/scionproto/scion/go/lib/common"
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/metrics"
 )
@@ -52,7 +51,7 @@ func newReassemblyList(epoch int, capacity int, s ingressSender,
 		snd:               s,
 		markedForDeletion: false,
 		entries:           list.New(),
-		buf:               bytes.NewBuffer(make(common.RawBytes, 0, frameBufCap)),
+		buf:               bytes.NewBuffer(make([]byte, 0, frameBufCap)),
 	}
 	if framesDiscarded != nil {
 		list.tooOld = framesDiscarded.With("reason", "too_old")
@@ -155,7 +154,7 @@ func (l *reassemblyList) tryReassemble() {
 			canReassemble = true
 			break
 		}
-		if currFrame.index != 0 {
+		if currFrame.index != 0xffff {
 			log.Error("Framing error occurred. Not enough bytes to reassemble packet",
 				"startFrame", startFrame.String(), "currFrame", currFrame.String(),
 				"pktLen", startFrame.pktLen)

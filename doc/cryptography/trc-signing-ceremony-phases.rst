@@ -45,7 +45,7 @@ The *ceremony administrator* shares the *USB flash drive* with
 each *voting representative*, and waits for each *voting representative*
 to copy the needed certificates.
 
-The *ceremony adminstrator* reminds participants that they need to copy all
+The *ceremony administrator* reminds participants that they need to copy all
 certificates needed for the role of the entity they represent. For those who are
 only voters, this means the *CP sensitive voting certificate* and the *CP
 regular voting certificate*. For those who are also Certificate Authorities in
@@ -127,7 +127,6 @@ same quoting, parentheses, etc.).
 .. literalinclude:: crypto_lib.sh
    :start-after: LITERALINCLUDE payload_conf_sample START
    :end-before: LITERALINCLUDE payload_conf_sample END
-   :dedent: 2
 
 .. note::
 
@@ -193,7 +192,7 @@ Display the TRC payload using:
 Walk the *voting representatives* through the output and describe the meaning
 and implications of each part.
 
-Once every *voting representative* has finished the singing process, announce
+Once every *voting representative* has finished the signing process, announce
 that **Phase 3** has successfully concluded.
 
 Phase 4
@@ -282,7 +281,7 @@ variables need to be set up:
    :end-before: LITERALINCLUDE export_paths END
    :dedent: 4
 
-Furthermore, all everything that is copied from the *USB Flash Drive* should be
+Furthermore, everything that is copied from the *USB Flash Drive* should be
 put in the current working directory.
 
 .. important::

@@ -17,16 +17,21 @@ package dataplane
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/crc64"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"github.com/serialx/hashring"
 
 	"github.com/scionproto/scion/go/lib/metrics"
 	"github.com/scionproto/scion/go/lib/snet"
+)
+
+var (
+	crcTable = crc64.MakeTable(crc64.ECMA)
 )
 
 type PathStatsPublisher interface {
@@ -57,21 +62,14 @@ type Session struct {
 
 	mutex sync.Mutex
 	// senders is a list of currently used senders.
-	senders map[snet.PathFingerprint]senderEntry
-	// hashRing is used to map packet quintuples to paths.
-	hashRing *hashring.HashRing
-}
-
-type senderEntry struct {
-	sender *sender
-	path   snet.Path
+	senders []*sender
 }
 
 // Close signals that the session should close up its internal Connections. Close returns as
 // soon as forwarding goroutines are signaled to shut down (never blocks).
 func (s *Session) Close() {
-	for _, entry := range s.senders {
-		entry.sender.Close()
+	for _, snd := range s.senders {
+		snd.Close()
 	}
 }
 
@@ -85,33 +83,21 @@ func (s *Session) Write(packet gopacket.Packet) {
 		return
 	}
 	if len(s.senders) == 1 {
-		// If there's only one path, we can skip the load balancing part.
-		var entry senderEntry
-		for _, entry = range s.senders {
-			break
-		}
-		entry.sender.Write(packet.Data())
+		s.senders[0].Write(packet.Data())
 		return
 	}
 	// Choose the path based on the packet's quintuple.
-	fingerprint, ok := s.hashRing.GetNode(string(extractQuintuple(packet)))
-	if ok {
-		s.senders[snet.PathFingerprint(fingerprint)].sender.Write(packet.Data())
-	}
-
+	hash := crc64.Checksum(extractQuintuple(packet), crcTable)
+	index := hash % uint64(len(s.senders))
+	s.senders[index].Write(packet.Data())
 }
 
 func (s *Session) String() string {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	res := fmt.Sprintf("ID: %d", s.SessionID)
-	var keys []string
-	for fingerprint := range s.senders {
-		keys = append(keys, string(fingerprint))
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		res += fmt.Sprintf("\n    %v", s.senders[snet.PathFingerprint(key)].path)
+	for _, snd := range s.senders {
+		res += fmt.Sprintf("\n    %v", snd.path)
 	}
 	return res
 }
@@ -131,37 +117,64 @@ func (s *Session) SetPaths(paths []snet.Path) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.senders == nil {
-		s.senders = make(map[snet.PathFingerprint]senderEntry)
+	created := make([]*sender, 0, len(paths))
+	reused := make(map[*sender]bool, len(s.senders))
+	for _, existingSender := range s.senders {
+		reused[existingSender] = false
 	}
 
-	senders := make(map[snet.PathFingerprint]senderEntry)
-	fingerprints := []string{}
 	for _, path := range paths {
-		fingerprint := snet.Fingerprint(path)
-		fingerprints = append(fingerprints, string(fingerprint))
-		oldSender, ok := s.senders[fingerprint]
-		if ok && pathsEqual(path, oldSender.path) {
-			senders[fingerprint] = oldSender
-			delete(s.senders, fingerprint)
-		} else {
-			snd, err := newSender(s.SessionID, s.DataPlaneConn, path,
-				s.GatewayAddr, s.PathStatsPublisher, s.Metrics)
-			if err != nil {
-				return err
+		// Find out whether we already have a sender for this path.
+		// Keep using old senders whenever possible.
+		if existingSender, ok := findSenderWithPath(s.senders, path); ok {
+			reused[existingSender] = true
+			continue
+		}
+
+		newSender, err := newSender(
+			s.SessionID,
+			s.DataPlaneConn,
+			path,
+			s.GatewayAddr,
+			s.PathStatsPublisher,
+			s.Metrics,
+		)
+		if err != nil {
+			// Collect newly created senders to avoid go routine leak.
+			for _, createdSender := range created {
+				createdSender.Close()
 			}
-			senders[fingerprint] = senderEntry{
-				sender: snd,
-				path:   path,
-			}
+			return err
+		}
+		created = append(created, newSender)
+	}
+
+	newSenders := created
+	for existingSender, reuse := range reused {
+		if !reuse {
+			existingSender.Close()
+			continue
+		}
+		newSenders = append(newSenders, existingSender)
+	}
+
+	// Sort the paths to get a minimal amount of consistency,
+	// at least in the case when new paths are the same as old paths.
+	sort.Slice(newSenders, func(x, y int) bool {
+		return strings.Compare(string(newSenders[x].pathFingerprint),
+			string(newSenders[y].pathFingerprint)) == -1
+	})
+	s.senders = newSenders
+	return nil
+}
+
+func findSenderWithPath(senders []*sender, path snet.Path) (*sender, bool) {
+	for _, s := range senders {
+		if pathsEqual(path, s.path) {
+			return s, true
 		}
 	}
-	for _, entry := range s.senders {
-		entry.sender.Close()
-	}
-	s.senders = senders
-	s.hashRing = hashring.New(fingerprints)
-	return nil
+	return nil, false
 }
 
 func pathsEqual(x, y snet.Path) bool {

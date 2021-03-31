@@ -16,6 +16,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -24,21 +25,22 @@ import (
 	"time"
 
 	quic "github.com/lucas-clemente/quic-go"
-	"github.com/vishvananda/netlink"
 	"google.golang.org/grpc"
 
 	"github.com/scionproto/scion/go/lib/addr"
+	"github.com/scionproto/scion/go/lib/daemon"
 	"github.com/scionproto/scion/go/lib/infra/infraenv"
 	"github.com/scionproto/scion/go/lib/infra/messenger"
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/metrics"
-	"github.com/scionproto/scion/go/lib/sciond"
+	"github.com/scionproto/scion/go/lib/routemgr"
 	"github.com/scionproto/scion/go/lib/serrors"
 	"github.com/scionproto/scion/go/lib/snet"
 	"github.com/scionproto/scion/go/lib/snet/squic"
 	"github.com/scionproto/scion/go/lib/sock/reliable"
 	"github.com/scionproto/scion/go/lib/sock/reliable/reconnect"
 	"github.com/scionproto/scion/go/lib/svc"
+	"github.com/scionproto/scion/go/lib/util"
 	"github.com/scionproto/scion/go/pkg/gateway/config"
 	"github.com/scionproto/scion/go/pkg/gateway/control"
 	controlgrpc "github.com/scionproto/scion/go/pkg/gateway/control/grpc"
@@ -46,7 +48,6 @@ import (
 	"github.com/scionproto/scion/go/pkg/gateway/pathhealth"
 	"github.com/scionproto/scion/go/pkg/gateway/pathhealth/policies"
 	"github.com/scionproto/scion/go/pkg/gateway/routing"
-	"github.com/scionproto/scion/go/pkg/gateway/routing/exporters/linux"
 	libgrpc "github.com/scionproto/scion/go/pkg/grpc"
 	gatewaypb "github.com/scionproto/scion/go/pkg/proto/gateway"
 	"github.com/scionproto/scion/go/pkg/service"
@@ -130,20 +131,14 @@ func (pcf PacketConnFactory) New() (net.PacketConn, error) {
 }
 
 type RoutingTableFactory struct {
-	Device netlink.Link
-	Source net.IP
+	RoutePublisherFactory routemgr.PublisherFactory
 }
 
 func (rtf RoutingTableFactory) New(
-	routingChains []*control.RoutingChain) (control.RoutingTable, error) {
+	routingChains []*control.RoutingChain,
+) (control.RoutingTable, error) {
 
-	if ExperimentalExportMainRT() {
-		return dataplane.NewRoutingTable(linux.RouteExporter{
-			Device: rtf.Device,
-			Source: rtf.Source,
-		}, routingChains), nil
-	}
-	return dataplane.NewRoutingTable(nil, routingChains), nil
+	return dataplane.NewRoutingTable(routingChains), nil
 }
 
 // ignoreSCMP ignores all received SCMP packets.
@@ -156,16 +151,14 @@ func (ignoreSCMP) Handle(pkt *snet.Packet) error {
 	return nil
 }
 
-// ConfigPublisherAdvertiser computes the networks that should be advertised depending
-// on the state of the last published routing policy file.
-type ConfigPublisherAdvertiser struct {
+// SelectAdvertisedRoutes computes the networks that should be advertised
+// depending on the state of the last published routing policy file.
+type SelectAdvertisedRoutes struct {
 	ConfigPublisher *control.ConfigPublisher
 }
 
-func (a *ConfigPublisherAdvertiser) AdvertiseList(from, to addr.IA) []*net.IPNet {
-	policy := a.ConfigPublisher.RoutingPolicy()
-	return routing.AdvertiseList(*policy, from, to)
-
+func (a *SelectAdvertisedRoutes) AdvertiseList(from, to addr.IA) []*net.IPNet {
+	return routing.AdvertiseList(a.ConfigPublisher.RoutingPolicy(), from, to)
 }
 
 type RoutingPolicyPublisherAdapter struct {
@@ -213,14 +206,20 @@ type Gateway struct {
 	Dispatcher reliable.Dispatcher
 
 	// Daemon is the API of the SCION Daemon.
-	Daemon sciond.Connector
+	Daemon daemon.Connector
 
 	// InternalDevice is the tunnel interface from which packets are read.
 	InternalDevice io.ReadWriteCloser
-	// RouteDevice is the device for routes added to the Linux routing table.
-	RouteDevice netlink.Link
-	// RouteSource is the source for routes added to the Linux routing table.
-	RouteSource net.IP
+	// RouteSourceIPv4 is the source hint for IPv4 routes added to the Linux routing table.
+	RouteSourceIPv4 net.IP
+	// RouteSourceIPv6 is the source hint for IPv6 routes added to the Linux routing table.
+	RouteSourceIPv6 net.IP
+
+	// RoutePublisherFactory allows to publish routes from the gatyeway.
+	// If nil, no routes will be published.
+	RoutePublisherFactory routemgr.PublisherFactory
+	// RouteConsumerFactory allows to receive routes. If nil, no routes are received.
+	RouteConsumerFactory routemgr.ConsumerFactory
 
 	// ConfigReloadTrigger can be used to trigger a config reload.
 	ConfigReloadTrigger chan struct{}
@@ -265,30 +264,36 @@ func (g *Gateway) Run() error {
 	log.SafeDebug(g.Logger, "Path monitor connection opened on Raw UDP/SCION",
 		"local_ip", g.PathMonitorIP, "local_port", pathMonitorPort)
 
-	pathRouter := &snet.BaseRouter{Querier: sciond.Querier{Connector: g.Daemon, IA: localIA}}
-	revocationHandler := sciond.RevHandler{Connector: g.Daemon}
+	pathRouter := &snet.BaseRouter{Querier: daemon.Querier{Connector: g.Daemon, IA: localIA}}
+	revocationHandler := daemon.RevHandler{Connector: g.Daemon}
 
 	var pathsMonitored, sessionPathsAvailable metrics.Gauge
+	var probesSent, probesReceived metrics.Counter
 	if g.Metrics != nil {
 		pathsMonitored = metrics.NewPromGauge(g.Metrics.PathsMonitored)
 		sessionPathsAvailable = metrics.NewPromGauge(g.Metrics.SessionPathsAvailable)
+		probesSent = metrics.NewPromCounter(g.Metrics.PathProbesSent)
+		probesReceived = metrics.NewPromCounter(g.Metrics.PathProbesReceived)
 	}
 	revStore := &pathhealth.MemoryRevocationStore{
 		Logger: g.Logger,
 	}
 	pathMonitor := &PathMonitor{
 		Monitor: &pathhealth.Monitor{
-			LocalIA:           localIA,
-			LocalIP:           g.PathMonitorIP,
-			Conn:              pathMonitorConnection,
-			RevocationHandler: revocationHandler,
-			Router:            pathRouter,
+			LocalIA:            localIA,
+			LocalIP:            g.PathMonitorIP,
+			Conn:               pathMonitorConnection,
+			RevocationHandler:  revocationHandler,
+			Router:             pathRouter,
+			PathUpdateInterval: PathUpdateInterval(),
 			RemoteWatcherFactory: &pathhealth.DefaultRemoteWatcherFactory{
 				PathWatcherFactory: &pathhealth.DefaultPathWatcherFactory{
 					Logger: g.Logger,
 				},
 				Logger:         g.Logger,
 				PathsMonitored: pathsMonitored,
+				ProbesSent:     probesSent,
+				ProbesReceived: probesReceived,
 			},
 			Logger:          g.Logger,
 			RevocationStore: revStore,
@@ -512,8 +517,10 @@ func (g *Gateway) Run() error {
 	gatewaypb.RegisterIPPrefixesServiceServer(
 		discoveryServer,
 		controlgrpc.IPPrefixServer{
-			LocalIA:            localIA,
-			Advertiser:         &ConfigPublisherAdvertiser{ConfigPublisher: configPublisher},
+			LocalIA: localIA,
+			Advertiser: &SelectAdvertisedRoutes{
+				ConfigPublisher: configPublisher,
+			},
 			PrefixesAdvertised: paMetric,
 		},
 	)
@@ -600,8 +607,7 @@ func (g *Gateway) Run() error {
 		ConfigurationUpdates: sessionConfigurations,
 		RoutingTableSwapper:  routingTable,
 		RoutingTableFactory: RoutingTableFactory{
-			Device: g.RouteDevice,
-			Source: g.RouteSource,
+			RoutePublisherFactory: g.RoutePublisherFactory,
 		},
 		EngineFactory: &control.DefaultEngineFactory{
 			PathMonitor: pathMonitor,
@@ -618,7 +624,10 @@ func (g *Gateway) Run() error {
 			},
 			Logger: g.Logger,
 		},
-		Logger: g.Logger,
+		RoutePublisherFactory: g.RoutePublisherFactory,
+		RouteSourceIPv4:       g.RouteSourceIPv4,
+		RouteSourceIPv6:       g.RouteSourceIPv6,
+		Logger:                g.Logger,
 	}
 	go func() {
 		defer log.HandlePanic()
@@ -634,16 +643,22 @@ func (g *Gateway) Run() error {
 	g.HTTPEndpoints["status"] = func(w http.ResponseWriter, _ *http.Request) {
 		engineController.Status(w)
 	}
+	g.HTTPEndpoints["diagnostics/prefixwatcher"] = func(w http.ResponseWriter, _ *http.Request) {
+		remoteMonitor.DiagnosticsWrite(w)
+	}
+	g.HTTPEndpoints["diagnostics/sgrp"] = g.diagnosticsSGRP(configPublisher)
 	var fwMetrics dataplane.IPForwarderMetrics
 	if g.Metrics != nil {
 		fwMetrics.IPPktBytesLocalRecv = metrics.NewPromCounter(
 			g.Metrics.IPPktBytesLocalReceivedTotal)
 		fwMetrics.IPPktsLocalRecv = metrics.NewPromCounter(g.Metrics.IPPktsLocalReceivedTotal)
 		fwMetrics.IPPktsInvalid = metrics.CounterWith(
-			metrics.NewPromCounter(g.Metrics.IPPktsDiscardedTotal),
-			"reason", "invalid",
-		)
+			metrics.NewPromCounter(g.Metrics.IPPktsDiscardedTotal), "reason", "invalid")
+		fwMetrics.IPPktsFragmented = metrics.CounterWith(
+			metrics.NewPromCounter(g.Metrics.IPPktsDiscardedTotal), "reason", "fragmented")
 		fwMetrics.ReceiveLocalErrors = metrics.NewPromCounter(g.Metrics.ReceiveLocalErrorsTotal)
+		fwMetrics.IPPktsNoRoute = metrics.CounterWith(
+			metrics.NewPromCounter(g.Metrics.IPPktsDiscardedTotal), "reason", "no_route")
 	}
 	forwarder := &dataplane.IPForwarder{
 		Reader:       g.InternalDevice,
@@ -671,8 +686,46 @@ func (g *Gateway) Run() error {
 	select {}
 }
 
-func ExperimentalExportMainRT() bool {
-	return os.Getenv("SCION_EXPERIMENTAL_GATEWAY_MAIN_RT") != ""
+func (g *Gateway) diagnosticsSGRP(pub *control.ConfigPublisher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var d struct {
+			Advertise struct {
+				Static []string `json:"static"`
+			} `json:"advertise"`
+			Learned struct {
+				Dynamic []string `json:"dynamic"`
+			} `json:"learned"`
+		}
+		// Avoid null in json output.
+		d.Advertise.Static = []string{}
+		d.Learned.Dynamic = []string{}
+
+		for _, s := range routing.StaticAdvertised(pub.RoutingPolicy()) {
+			d.Advertise.Static = append(d.Advertise.Static, s.String())
+		}
+		if p, ok := g.RoutePublisherFactory.(interface{ Diagnostics() routemgr.Diagnostics }); ok {
+			for _, r := range p.Diagnostics().Routes {
+				d.Learned.Dynamic = append(d.Learned.Dynamic, r.Prefix.String())
+			}
+		}
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "    ")
+		enc.Encode(d)
+	}
+}
+
+func PathUpdateInterval() time.Duration {
+	s, ok := os.LookupEnv("SCION_EXPERIMENTAL_GATEWAY_PATH_UPDATE_INTERVAL")
+	if !ok {
+		return 0
+	}
+	dur, err := util.ParseDuration(s)
+	if err != nil {
+		log.Info("Failed to parse SCION_EXPERIMENTAL_GATEWAY_PATH_UPDATE_INTERVAL, using default",
+			"err", err)
+		return 0
+	}
+	return dur
 }
 
 func CreateIngressMetrics(m *Metrics) dataplane.IngressMetrics {

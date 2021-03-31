@@ -9,8 +9,7 @@ import threading
 from plumbum import cmd
 
 from acceptance.common import base
-from acceptance.common import log
-from acceptance.common import tools
+from acceptance.common import docker
 from acceptance.common import scion
 
 
@@ -49,31 +48,18 @@ class Test(base.TestBase):
     """
 
     def main(self):
-        print("artifacts dir: %s" % self.test_state.artifacts)
-        self._unpack_topo()
         if not self.nested_command:
             try:
-                self._setup()
+                self.setup()
                 time.sleep(20)
                 self._run()
             finally:
-                self._teardown()
+                self.teardown()
 
-    def _unpack_topo(self):
-        cmd.tar("-xf", "./acceptance/hidden_paths/gen.tar",
-                "-C", self.test_state.artifacts)
-        cmd.sed("-i", "s#$SCIONROOT#%s#g" % self.test_state.artifacts,
-                self.test_state.artifacts / "gen/scion-dc.yml")
+    def setup(self):
+        self.setup_prepare()
 
-    def _docker_compose(self, *args) -> str:
-        return cmd.docker_compose("-f", self.test_state.artifacts / "gen" / "scion-dc.yml",
-                                  "-p", "scion", *args)
-
-    def _setup(self):
-        print(cmd.docker("image", "load", "-i",
-              "./acceptance/hidden_paths/testcontainers.tar"))
-
-        http_server_port = 9090
+        http_server_port = 9099
 
         as_numbers = ["2", "3", "4", "5"]
         # HTTP configuration server runs on 0.0.0.0 and needs to be reachable from
@@ -109,19 +95,19 @@ class Test(base.TestBase):
             hp_config_url = "http://%s:%d/acceptance/hidden_paths/testdata/%s" % (
                 server_ips[as_number], http_server_port, hp_configs[as_number])
 
-            as_dir = "ASff00_0_%s" % as_number
-            as_dir_path = self.test_state.artifacts / "gen" / as_dir
-
-            daemon_path = as_dir_path / "sd.toml"
+            daemon_path = self.test_state.artifacts / "gen" / ("ASff00_0_%s" % as_number) \
+                / "sd.toml"
             scion.update_toml({"sd.hidden_path_groups": hp_config_url}, [daemon_path])
 
             control_id = "cs1-ff00_0_%s-1" % as_number
-            control_file = "%s.toml" % control_id
-            control_path = as_dir_path / control_file
+            control_path = self.test_state.artifacts / "gen" / ("ASff00_0_%s" % as_number) \
+                / ("%s.toml" % control_id)
             scion.update_toml({"path.hidden_paths_cfg": hp_config_url}, [control_path])
 
             # For simplicity, expose the services in all hidden paths ASes,
             # even though some don't need the registration service.
+            as_dir_path = self.test_state.artifacts / "gen" / ("ASff00_0_%s" % as_number)
+
             topology_update = {
                 "hidden_segment_lookup_service.%s.addr" % control_id:
                     control_addresses[as_number],
@@ -131,11 +117,12 @@ class Test(base.TestBase):
             topology_file = as_dir_path / "topology.json"
             scion.update_json(topology_update, [topology_file])
 
-        server = http.server.HTTPServer(("0.0.0.0", 9090), http.server.SimpleHTTPRequestHandler)
+        server = http.server.HTTPServer(
+                ("0.0.0.0", http_server_port), http.server.SimpleHTTPRequestHandler)
         server_thread = threading.Thread(target=configuration_server, args=[server])
         server_thread.start()
 
-        print(self._docker_compose("up", "-d"))
+        self.setup_start()
         time.sleep(4)  # Give applications time to download configurations
 
         self._testers = {
@@ -149,18 +136,6 @@ class Test(base.TestBase):
             "3": "1-ff00:0:3",
             "4": "1-ff00:0:4",
             "5": "1-ff00:0:5",
-        }
-        self._daemons_api = {
-            "2": "172.20.0.52:30255",
-            "3": "172.20.0.60:30255",
-            "4": "172.20.0.68:30255",
-            "5": "172.20.0.76:30255",
-        }
-        self._dispatcher_ips = {
-            "2": "172.20.0.51",
-            "3": "172.20.0.59",
-            "4": "172.20.0.67",
-            "5": "172.20.0.75",
         }
         server.shutdown()
 
@@ -183,31 +158,10 @@ class Test(base.TestBase):
         self._showpaths_run(destination, source, retcode)
 
     def _showpaths_run(self, source_as: str, destination_as: str, retcode: int):
-        print(cmd.docker("exec", "-t", self._testers[source_as], "./bin/scion",
+        print(cmd.docker("exec", "-t", self._testers[source_as], "scion",
                          "sp", self._ases[destination_as],
-                         "--sciond", self._daemons_api[source_as],
-                         "--local", self._dispatcher_ips[source_as],
                          "--timeout", "2s",
                          retcode=retcode))
-
-    def _teardown(self):
-        self.test_state.dc.compose_file = self.test_state.artifacts / "gen/scion-dc.yml"
-        self.test_state.dc.collect_logs(out_dir=self.test_state.artifacts / "logs")
-        print(self._docker_compose("down", "-v"))
-
-
-@Test.subcommand("setup")
-class TestSetup(Test):
-
-    def main(self):
-        self._setup()
-
-
-@Test.subcommand("teardown")
-class TestTeardown(Test):
-
-    def main(self):
-        self._teardown()
 
 
 def configuration_server(server):
@@ -217,6 +171,6 @@ def configuration_server(server):
 
 
 if __name__ == "__main__":
-    log.init_log()
-    Test.test_state = base.TestState(scion.SCIONDocker(), tools.DC())
+    base.register_commands(Test)
+    Test.test_state = base.TestState(scion.SCIONDocker(), docker.Compose())
     Test.run()

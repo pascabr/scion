@@ -25,6 +25,7 @@ import (
 	"github.com/scionproto/scion/go/lib/addr"
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/pktcls"
+	"github.com/scionproto/scion/go/lib/routemgr"
 	"github.com/scionproto/scion/go/lib/serrors"
 	"github.com/scionproto/scion/go/pkg/worker"
 )
@@ -84,6 +85,15 @@ type EngineController struct {
 
 	// EngineFactory is used to build new engines. It must not be nil.
 	EngineFactory EngineFactory
+
+	// RoutePublisherFactory allows to publish routes from the gateway.
+	// If nil, no routes will be published.
+	RoutePublisherFactory routemgr.PublisherFactory
+
+	// RouteSourceIPv4 is the source hint for IPv4 routes added to the Linux routing table.
+	RouteSourceIPv4 net.IP
+	// RouteSourceIPv6 is the source hint for IPv6 routes added to the Linux routing table.
+	RouteSourceIPv6 net.IP
 
 	// SwapDelay is the interval between creating a new engine and setting it to be the active
 	// engine. If 0, the new engine is immediately swapped in.
@@ -150,10 +160,12 @@ func (c *EngineController) run() error {
 		// The new forwarding engine uses a completely fresh routing table
 		// for the data-plane, built based on the data collected in the new
 		// session configurations.
-		routingTable, err := c.RoutingTableFactory.New(rcs)
+		rt, err := c.RoutingTableFactory.New(rcs)
 		if err != nil {
 			return serrors.WrapStr("creating routing table", err)
 		}
+		routingTable := NewPublishingRoutingTable(rcs, rt,
+			c.RoutePublisherFactory.NewPublisher(), net.IP{}, c.RouteSourceIPv4, c.RouteSourceIPv6)
 
 		newEngine := c.EngineFactory.New(routingTable, update, rcMapping)
 

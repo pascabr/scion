@@ -9,7 +9,7 @@
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specdic language governing permissions and
+// See the License for the specific language governing permissions and
 // limitations under the License.
 
 package main
@@ -35,6 +35,7 @@ import (
 var (
 	bfd        = flag.Bool("bfd", false, "Run BFD tests instead of the common ones")
 	logConsole = flag.String("log.console", "debug", "Console logging level: debug|info|error")
+	dir        = flag.String("artifacts", "", "Artifacts directory")
 )
 
 func main() {
@@ -55,6 +56,9 @@ func realMain() int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
 		return 1
+	}
+	if *dir != "" {
+		artifactsDir = *dir
 	}
 	if v := os.Getenv("TEST_ARTIFACTS_DIR"); v != "" {
 		artifactsDir = v
@@ -90,6 +94,9 @@ func realMain() int {
 		cases.SCMPBadMAC(artifactsDir, hfMAC),
 		cases.SCMPBadMACInternal(artifactsDir, hfMAC),
 		cases.SCMPExpiredHopAfterXover(artifactsDir, hfMAC),
+		cases.SCMPExpiredHopAfterXoverConsDir(artifactsDir, hfMAC),
+		cases.SCMPExpiredHopAfterXoverInternal(artifactsDir, hfMAC),
+		cases.SCMPExpiredHopAfterXoverInternalConsDir(artifactsDir, hfMAC),
 		cases.SCMPExpiredHop(artifactsDir, hfMAC),
 		cases.SCMPChildToParentXover(artifactsDir, hfMAC),
 		cases.SCMPParentToChildXover(artifactsDir, hfMAC),
@@ -101,7 +108,9 @@ func realMain() int {
 		cases.SCMPUnknownHop(artifactsDir, hfMAC),
 		cases.SCMPUnknownHopEgress(artifactsDir, hfMAC),
 		cases.SCMPTracerouteIngress(artifactsDir, hfMAC),
+		cases.SCMPTracerouteIngressConsDir(artifactsDir, hfMAC),
 		cases.SCMPTracerouteEgress(artifactsDir, hfMAC),
+		cases.SCMPTracerouteEgressConsDir(artifactsDir, hfMAC),
 		cases.SCMPTracerouteEgressAfterXover(artifactsDir, hfMAC),
 		cases.SCMPTracerouteInternal(artifactsDir, hfMAC),
 		cases.SCMPBadPktLen(artifactsDir, hfMAC),

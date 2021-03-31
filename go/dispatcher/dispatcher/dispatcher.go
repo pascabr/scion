@@ -1,3 +1,17 @@
+// Copyright 2020 Anapaya Systems
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package dispatcher
 
 import (
@@ -10,7 +24,6 @@ import (
 	"github.com/scionproto/scion/go/dispatcher/internal/registration"
 	"github.com/scionproto/scion/go/dispatcher/internal/respool"
 	"github.com/scionproto/scion/go/lib/addr"
-	"github.com/scionproto/scion/go/lib/common"
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/ringbuf"
 	"github.com/scionproto/scion/go/lib/serrors"
@@ -247,7 +260,7 @@ type underlayConnWrapper struct {
 }
 
 func (o *underlayConnWrapper) ReadFrom(p []byte) (int, net.Addr, error) {
-	n, meta, err := o.Conn.Read(common.RawBytes(p))
+	n, meta, err := o.Conn.Read([]byte(p))
 	if meta == nil {
 		return n, nil, err
 	}
@@ -260,7 +273,7 @@ func (o *underlayConnWrapper) WriteTo(p []byte, a net.Addr) (int, error) {
 	if !ok {
 		return 0, serrors.New("address is not UDP", "addr", a)
 	}
-	return o.Conn.WriteTo(common.RawBytes(p), udpAddr)
+	return o.Conn.WriteTo([]byte(p), udpAddr)
 }
 
 func (o *underlayConnWrapper) Close() error {

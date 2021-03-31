@@ -144,6 +144,19 @@ const (
 	LinkTypeOpennet
 )
 
+func (lt LinkType) String() string {
+	switch lt {
+	case LinkTypeDirect:
+		return "direct"
+	case LinkTypeMultihop:
+		return "multihop"
+	case LinkTypeOpennet:
+		return "opennet"
+	default:
+		return "unset"
+	}
+}
+
 // GeoCoordinates describes a geographical position (of a border router on the path).
 type GeoCoordinates struct {
 	// Latitude of the geographic coordinate, in the WGS 84 datum.
@@ -157,7 +170,7 @@ type GeoCoordinates struct {
 type PathFingerprint string
 
 func (pf PathFingerprint) String() string {
-	return common.RawBytes(pf).String()
+	return fmt.Sprintf("%x", []byte(pf))
 }
 
 // Fingerprint uniquely identifies the path based on the sequence of

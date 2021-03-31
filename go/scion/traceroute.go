@@ -25,7 +25,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/scionproto/scion/go/lib/sciond"
+	"github.com/scionproto/scion/go/lib/daemon"
 	"github.com/scionproto/scion/go/lib/serrors"
 	"github.com/scionproto/scion/go/lib/snet"
 	"github.com/scionproto/scion/go/lib/snet/addrutil"
@@ -33,6 +33,7 @@ import (
 	"github.com/scionproto/scion/go/lib/topology"
 	"github.com/scionproto/scion/go/lib/tracing"
 	"github.com/scionproto/scion/go/pkg/app"
+	"github.com/scionproto/scion/go/pkg/app/path"
 	"github.com/scionproto/scion/go/pkg/traceroute"
 )
 
@@ -45,7 +46,7 @@ func newTraceroute(pather CommandPather) *cobra.Command {
 		logLevel    string
 		noColor     bool
 		refresh     bool
-		sciond      string
+		daemon      string
 		sequence    string
 		timeout     time.Duration
 		tracer      string
@@ -61,7 +62,7 @@ SCMP traceroute packets.
 
 If any packet is dropped, traceroute will exit with code 1.
 On other errors, traceroute will exit with code 2.
-%s`, filterHelp),
+%s`, app.SequenceHelp),
 
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -69,7 +70,7 @@ On other errors, traceroute will exit with code 2.
 			if err != nil {
 				return serrors.WrapStr("parsing remote", err)
 			}
-			if err := setupLog(flags.logLevel); err != nil {
+			if err := app.SetupLog(flags.logLevel); err != nil {
 				return serrors.WrapStr("setting up logging", err)
 			}
 			closer, err := setupTracer("traceroute", flags.tracer)
@@ -87,7 +88,7 @@ On other errors, traceroute will exit with code 2.
 
 			ctx, cancelF := context.WithTimeout(traceCtx, time.Second)
 			defer cancelF()
-			sd, err := sciond.NewService(flags.sciond).Connect(ctx)
+			sd, err := daemon.NewService(flags.daemon).Connect(ctx)
 			if err != nil {
 				return serrors.WrapStr("connecting to SCION Daemon", err)
 			}
@@ -96,9 +97,12 @@ On other errors, traceroute will exit with code 2.
 				return err
 			}
 			span.SetTag("src.isd_as", info.IA)
-			path, err := app.ChoosePath(traceCtx, sd, remote.IA,
-				flags.interactive, flags.refresh, flags.sequence,
-				app.WithDisableColor(flags.noColor))
+			path, err := path.Choose(traceCtx, sd, remote.IA,
+				path.WithInteractive(flags.interactive),
+				path.WithRefresh(flags.refresh),
+				path.WithSequence(flags.sequence),
+				path.WithColorScheme(path.DefaultColorScheme(flags.noColor)),
+			)
 			if err != nil {
 				return err
 			}
@@ -162,10 +166,9 @@ On other errors, traceroute will exit with code 2.
 	cmd.Flags().IPVar(&flags.local, "local", nil, "IP address to listen on")
 	cmd.Flags().StringVar(&flags.dispatcher, "dispatcher", reliable.DefaultDispPath,
 		"dispatcher socket")
-	cmd.Flags().StringVar(&flags.sciond, "sciond", sciond.DefaultAPIAddress, "SCION Daemon address")
-	cmd.Flags().StringVar(&flags.sequence, "sequence", "", "sequence space separated list of HPs")
-	cmd.Flags().StringVar(&flags.logLevel, "log.level", "", "Console logging level verbosity "+
-		"(debug|info|error)")
+	cmd.Flags().StringVar(&flags.daemon, "sciond", daemon.DefaultAPIAddress, "SCION Daemon address")
+	cmd.Flags().StringVar(&flags.sequence, "sequence", "", app.SequenceUsage)
+	cmd.Flags().StringVar(&flags.logLevel, "log.level", "", app.LogLevelUsage)
 	cmd.Flags().StringVar(&flags.tracer, "tracing.agent", "", "Tracing agent address")
 	return cmd
 }

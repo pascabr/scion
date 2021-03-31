@@ -163,7 +163,7 @@ class DockerGenerator(object):
             self.dc_conf['services']['scion_%s' % k] = entry
 
     def _control_service_conf(self, topo_id, topo, base):
-        for k, v in topo.get("control_service", {}).items():
+        for k in topo.get("control_service", {}).keys():
             entry = {
                 'image': docker_image(self.args, 'control'),
                 'container_name': self.prefix + k,
@@ -189,7 +189,8 @@ class DockerGenerator(object):
             'user': self.user,
             'volumes': [],
         }
-        keys = list(topo.get("border_routers", {})) + list(topo.get("control_service", {}))
+        keys = (list(topo.get("border_routers", {})) + list(topo.get("control_service", {})) +
+                ["tester_%s" % topo_id.file_fmt()])
         for disp_id in keys:
             entry = copy.deepcopy(base_entry)
             net_key = disp_id

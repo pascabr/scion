@@ -213,6 +213,7 @@ Possible values are:
 
 - ``invalid``: discarded because the received IP packet was corrupted
 - ``no_route``: discarded because there is no route for the IP packet
+- ``fragmented``: discarded because the IP packet was fragmented.
 
 **Labels**: ``reason``
 
@@ -254,6 +255,28 @@ Monitored paths
 **Type**: Gauge
 
 **Description**: Number of paths being monitored to a given remote AS.
+
+**Labels**: ``remote_isd_as``
+
+Path probes sent
+^^^^^^^^^^^^^^^^
+
+**Name**: ``gateway_path_probes_sent``
+
+**Type**: Counter
+
+**Description**: Number of path probes being sent.
+
+**Labels**: ``remote_isd_as``
+
+Path probe replies received
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Name**: ``gateway_path_probes_received``
+
+**Type**: Counter
+
+**Description**: Number of replies to the path probes being received.
 
 **Labels**: ``remote_isd_as``
 
@@ -306,6 +329,31 @@ Advertised IP prefixes
 
 **Labels**: ``remote_isd_as``
 
+Zebra Metrics
+-------------
+
+Connection to Zebra
+^^^^^^^^^^^^^^^^^^^
+
+**Name**: ``gateway_zebra_connected``
+
+**Type**: Gauge
+
+**Description**: Indicates whether gateway is connected to Zebra server.
+
+**Labels**: none
+
+Processing updates from Zebra
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Name**: ``zebra_application_unresponsive``
+
+**Type**: Counter
+
+**Description**: Incremented each time when zebra can't push routes to the gateway.
+
+**Labels**: none
+
 HTTP API
 ========
 
@@ -315,7 +363,7 @@ configuration setting.
 The HTTP API does not support user authentication or HTTPS. Applications will want to firewall
 this port or bind to a loopback address.
 
-In addition to the :ref:`common HTTP API <common-http-api>`, the ``daemon`` supports the following API calls:
+In addition to the :ref:`common HTTP API <common-http-api>`, the ``gateway`` supports the following API calls:
 
 - ``/status`` (**EXPERIMENTAL**)
 
@@ -403,7 +451,7 @@ The first column represents the action. Currently, we support: ::
 
   accept    <a> <b> <prefixes>: <b> accepts the IP prefixes <prefixes> from <a>.
   reject    <a> <b> <prefixes>: <b> rejects the IP prefixes <prefixes> from <a>.
-  advertise <a> <b> <prefixes>: <a> advertists the IP prefixes <prefixes> to <b>.
+  advertise <a> <b> <prefixes>: <a> advertises the IP prefixes <prefixes> to <b>.
 
 The remaining three columns define the matchers of a rule. The second and
 third column are ISD-AS matchers, the forth column is a prefix matcher.

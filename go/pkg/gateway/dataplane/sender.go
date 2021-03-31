@@ -37,6 +37,7 @@ type sender struct {
 	conn               net.PacketConn
 	address            net.Addr
 	pathStatsPublisher PathStatsPublisher
+	path               snet.Path
 	pathFingerprint    snet.PathFingerprint
 	metrics            SessionMetrics
 }
@@ -49,14 +50,13 @@ func newSender(sessID uint8, conn net.PacketConn, path snet.Path,
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	addrLen := addr.IABytes*2 + len(localAddr.IP) + len(gatewayAddr.IP)
 	pathLen := len(path.Path().Raw)
-	mtu := path.Metadata().MTU - slayers.CmnHdrLen - uint16(addrLen) - uint16(pathLen) -
-		udpHdrLen
+	mtu := int(path.Metadata().MTU) - slayers.CmnHdrLen - addrLen - pathLen - udpHdrLen
 	if mtu < minMTU {
 		return nil, serrors.New("insufficient MTU", "mtu", mtu, "minMTU", minMTU)
 	}
 
 	c := &sender{
-		encoder: newEncoder(sessID, NewStreamID(), mtu),
+		encoder: newEncoder(sessID, NewStreamID(), uint16(mtu)),
 		conn:    conn,
 		address: &snet.UDPAddr{
 			IA:      path.Destination(),
@@ -65,6 +65,7 @@ func newSender(sessID uint8, conn net.PacketConn, path snet.Path,
 			Host:    &gatewayAddr,
 		},
 		pathStatsPublisher: pathStatsPublisher,
+		path:               path,
 		pathFingerprint:    snet.Fingerprint(path),
 		metrics:            metrics,
 	}
@@ -105,7 +106,7 @@ func (c *sender) run() {
 		increaseCounterMetric(c.metrics.FrameBytesSent, float64(len(frame)))
 
 		if c.pathStatsPublisher != nil {
-			c.pathStatsPublisher.PublishEgressStats(string(c.pathFingerprint),
+			c.pathStatsPublisher.PublishEgressStats(c.pathFingerprint.String(),
 				1, int64(len(frame)))
 		}
 	}

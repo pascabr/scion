@@ -25,13 +25,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/scionproto/scion/go/lib/sciond"
+	"github.com/scionproto/scion/go/lib/daemon"
 	"github.com/scionproto/scion/go/lib/serrors"
 	"github.com/scionproto/scion/go/lib/snet"
 	"github.com/scionproto/scion/go/lib/snet/addrutil"
 	"github.com/scionproto/scion/go/lib/sock/reliable"
 	"github.com/scionproto/scion/go/lib/tracing"
 	"github.com/scionproto/scion/go/pkg/app"
+	"github.com/scionproto/scion/go/pkg/app/path"
 	"github.com/scionproto/scion/go/pkg/ping"
 )
 
@@ -47,7 +48,8 @@ func newPing(pather CommandPather) *cobra.Command {
 		maxMTU      bool
 		noColor     bool
 		refresh     bool
-		sciond      string
+		healthyOnly bool
+		daemon      string
 		sequence    string
 		size        uint
 		timeout     time.Duration
@@ -64,17 +66,20 @@ func newPing(pather CommandPather) *cobra.Command {
 When the --count option is set, ping sends the specified number of SCMP echo packets
 and reports back the statistics.
 
+When the --healthy-only option is set, ping first determines healthy paths through probing and
+chooses amongst them.
+
 If no reply packet is received at all, ping will exit with code 1.
 On other errors, ping will exit with code 2.
 
-%s`, filterHelp),
+%s`, app.SequenceHelp),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			remote, err := snet.ParseUDPAddr(args[0])
 			if err != nil {
 				return serrors.WrapStr("parsing remote", err)
 			}
-			if err := setupLog(flags.logLevel); err != nil {
+			if err := app.SetupLog(flags.logLevel); err != nil {
 				return serrors.WrapStr("setting up logging", err)
 			}
 			closer, err := setupTracer("ping", flags.tracer)
@@ -92,7 +97,7 @@ On other errors, ping will exit with code 2.
 
 			ctx, cancelF := context.WithTimeout(traceCtx, time.Second)
 			defer cancelF()
-			sd, err := sciond.NewService(flags.sciond).Connect(ctx)
+			sd, err := daemon.NewService(flags.daemon).Connect(ctx)
 			if err != nil {
 				return serrors.WrapStr("connecting to SCION Daemon", err)
 			}
@@ -102,15 +107,27 @@ On other errors, ping will exit with code 2.
 				return err
 			}
 			span.SetTag("src.isd_as", info.IA)
-			path, err := app.ChoosePath(traceCtx, sd, remote.IA,
-				flags.interactive, flags.refresh, flags.sequence,
-				app.WithDisableColor(flags.noColor))
+
+			opts := []path.Option{
+				path.WithInteractive(flags.interactive),
+				path.WithRefresh(flags.refresh),
+				path.WithSequence(flags.sequence),
+				path.WithColorScheme(path.DefaultColorScheme(flags.noColor)),
+			}
+			if flags.healthyOnly {
+				opts = append(opts, path.WithProbing(&path.ProbeConfig{
+					LocalIA: info.IA,
+					LocalIP: flags.local,
+				}))
+			}
+			path, err := path.Choose(traceCtx, sd, remote.IA, opts...)
 			if err != nil {
 				return err
 			}
 			remote.Path = path.Path()
 			remote.NextHop = path.UnderlayNextHop()
 
+			// Resolve local IP based on underlay next hop
 			localIP := flags.local
 			if localIP == nil {
 				target := remote.Host.IP
@@ -190,8 +207,9 @@ On other errors, ping will exit with code 2.
 	cmd.Flags().BoolVar(&flags.noColor, "no-color", false, "disable colored output")
 	cmd.Flags().DurationVar(&flags.timeout, "timeout", time.Second, "timeout per packet")
 	cmd.Flags().IPVar(&flags.local, "local", nil, "IP address to listen on")
-	cmd.Flags().StringVar(&flags.sciond, "sciond", sciond.DefaultAPIAddress, "SCION Daemon address")
-	cmd.Flags().StringVar(&flags.sequence, "sequence", "", "sequence space separated list of HPs")
+	cmd.Flags().StringVar(&flags.daemon, "sciond", daemon.DefaultAPIAddress, "SCION Daemon address")
+	cmd.Flags().StringVar(&flags.sequence, "sequence", "", app.SequenceUsage)
+	cmd.Flags().BoolVar(&flags.healthyOnly, "healthy-only", false, "only use healthy paths")
 	cmd.Flags().StringVar(&flags.dispatcher, "dispatcher", reliable.DefaultDispPath,
 		"dispatcher socket")
 	cmd.Flags().BoolVar(&flags.refresh, "refresh", false, "set refresh flag for path request")
@@ -206,8 +224,7 @@ the SCION path.`,
 		`choose the payload size such that the sent SCION packet including the SCION Header,
 SCMP echo header and payload are equal to the MTU of the path. This flag overrides the
 'payload_size' flag.`)
-	cmd.Flags().StringVar(&flags.logLevel, "log.level", "", "Console logging level verbosity "+
-		"(debug|info|error)")
+	cmd.Flags().StringVar(&flags.logLevel, "log.level", "", app.LogLevelUsage)
 	cmd.Flags().StringVar(&flags.tracer, "tracing.agent", "", "Tracing agent address")
 	return cmd
 }

@@ -125,10 +125,18 @@ For security reasons, SCION uses a custom list of acceptable algorithms. The
 list currently contains only the *ECDSA* signature algorithm (defined in
 [X962]_).
 
-The OID for *ECDSA* is defined as ``ecdsa-with-SHA512`` in [RFC5758]_. We
-include it here::
+The OIDs for *ECDSA* are defined as ``ecdsa-with-SHA256``,
+``ecdsa-with-SHA384``, and ``ecdsa-with-SHA512`` in [RFC5758]_. We include them
+here::
 
-    sigAlg-ecdsa      ALGORITHM         ::= { OID ecdsa-with-SHA512 }
+    sigAlg-ecdsa-SHA256      ALGORITHM         ::= { OID ecdsa-with-SHA256 }
+    sigAlg-ecdsa-SHA384      ALGORITHM         ::= { OID ecdsa-with-SHA384 }
+    sigAlg-ecdsa-SHA512      ALGORITHM         ::= { OID ecdsa-with-SHA512 }
+
+    ecdsa-with-SHA256 OBJECT IDENTIFIER ::= { iso(1) member-body(2)
+        us(840) ansi-X9-62(10045) signatures(4) ecdsa-with-SHA2(3) 2 }
+    ecdsa-with-SHA384 OBJECT IDENTIFIER ::= { iso(1) member-body(2)
+        us(840) ansi-X9-62(10045) signatures(4) ecdsa-with-SHA2(3) 3 }
     ecdsa-with-SHA512 OBJECT IDENTIFIER ::= { iso(1) member-body(2)
         us(840) ansi-X9-62(10045) signatures(4) ecdsa-with-SHA2(3) 4 }
 
@@ -148,11 +156,19 @@ The OIDs for the above curves are::
     secp521r1 OBJECT IDENTIFIER ::= {
        iso(1) identified-organization(3) certicom(132) curve(0) 35 }
 
-Implementations must include support for P-256, P-384, and P-521.
+If an ECDSA key is used to produce a signature, the appropriate hash size should
+be used:
+
+- If the signing key is P-256, the signature should use ECDSA with with SHA-256
+- If the signing key is P-384, the signature should use ECDSA with with SHA-384
+- If the signing key is P-521, the signature should use ECDSA with with SHA-512
+
+
+Implementations MUST include support for P-256, P-384, and P-521.
 
 Note that the list might be extended in the future. SCION implementations must
-reject cryptographical algorithms not found on the list. This document currently
-serves as the list of accepted cryptographical algorithms.
+reject cryptographic algorithms not found on the list. This document currently
+serves as the list of accepted cryptographic algorithms.
 
 For convenience, the ``AlgorithmIdentifier`` definition is included below:
 
@@ -256,13 +272,10 @@ certificates:
 Subject
 -------
 
-The ``subject`` field describes the entity that owns the certificate. It is defined
-in the same way as the ``issuer`` field (see :ref:`issuer`).
-
-Note that [RFC5280]_, Section 4.1.2.6,
-extensions **are not used** for subject information. SCION CP certificates must
-have the ``subject`` field defined (same as the ``issuer`` field), and the
-``subjectAltName`` extension must not be used.
+The ``subject`` field describes the entity that owns the certificate. It is
+defined in the same way as the ``issuer`` field (see :ref:`issuer`). All SCION
+CP certificates MUST have the ``subject`` field defined (with the same
+requirements as the ``issuer`` field).
 
 Subject public key info
 -----------------------
@@ -381,7 +394,7 @@ Each key usage attribute has the following semantics in SCION:
 - ``dataEncipherment``: not used
 - ``keyAgreement``: not used
 - ``keyCertSign``: the key can be used to sign certificates
-- ``cRLSign``: the key can be used to sign revocation lists
+- ``cRLSign``: not used
 - ``encipherOnly``: not used
 - ``decipherOnly``: not used
 
@@ -472,7 +485,7 @@ The recommended maximum validity period of a **CP Root certificate** is 1 year.
 Extension constraints
 ---------------------
 
-**Key usage**.  The ``keyCertSign`` and ``cRLSign`` attributes must be set. The
+**Key usage**.  The ``keyCertSign`` attributes must be set. The
 ``digitalSignature`` attribute must not be set, as in the context of SCION this
 has the semantics of *allowed to sign control-plane messages*.
 
@@ -505,7 +518,7 @@ The recommended maximum validity period of a **CP CA certificate** is 1 week.
 Extension constraints
 ---------------------
 
-**Key usage**. The ``keyCertSign`` and ``cRLSign`` attributes must be set. The
+**Key usage**. The ``keyCertSign`` attributes must be set. The
 ``digitalSignature`` attribute must not be set, as in the context of SCION this
 has the semantics of *allowed to sign control-plane messages*.
 
@@ -522,7 +535,7 @@ requires that this be marked as critical.
 CP AS Certificate
 =================
 
-**CP AS Certificates** are used by SCION ASes to sign control-plane mesages.
+**CP AS Certificates** are used by SCION ASes to sign control-plane messages.
 
 In X.509 terms, **CP AS Certificates** are end-entity certificates.
 

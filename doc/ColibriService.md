@@ -31,10 +31,14 @@ the border router and `sciond` in the endhost:
 The COS is structured similarly to other existing Go infrastructure services. It reuses the
 following:
 
-* [go/lib/env](../go/lib/env): Is used for configuration and setup of the service.
-* [go/pkg/trust](../go/pkg/trust): Is used for crypto material.
-* [go/lib/infra](../go/lib/infra): Is used for the messenger to send and receive messages.
-* [go/lib/periodic](../go/lib/periodic): Is used for periodic tasks.
+* [go/lib/env](https://github.com/scionproto/scion/tree/master/go/lib/env):
+  Is used for configuration and setup of the service.
+* [go/pkg/trust](https://github.com/scionproto/scion/tree/master/go/pkg/trust):
+  Is used for crypto material.
+* [go/lib/infra](https://github.com/scionproto/scion/tree/master/go/lib/infra):
+  Is used for the messenger to send and receive messages.
+* [go/lib/periodic](://github.com/scionproto/scion/tree/master/go/lib/periodic):
+  Is used for periodic tasks.
 
 The COS is differentiated into these parts:
 
@@ -50,7 +54,7 @@ The COS is differentiated into these parts:
 ### Segment Reservations
 
 Note: we use "forward the request" with the following meaning: if the current AS is not
-the last AS in the reservation path, send the request to the next AS in the resevation path.
+the last AS in the reservation path, send the request to the next AS in the reservation path.
 If the current AS is the last one, do nothing.
 
 #### Handle a Setup Response
@@ -60,7 +64,7 @@ The request is forwarded from AS<sub>i</sub> to AS<sub>i+1</sub>, where AS<sub>i
 next AS after AS<sub>i</sub> in the path of the reservation.
 
 1. The store saves the reservation as final.
-1. If this AS is the first one in the reservation path (aka *resevation initiator*),
+1. If this AS is the first one in the reservation path (aka *reservation initiator*),
    the store sends an index confirmation request to the next AS in the path.
 1. If this AS is the not the first one in the reservation path, the store sends a
    response message to the previous AS's *COS*.

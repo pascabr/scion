@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//   http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +16,7 @@ package dataplane_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"testing"
@@ -29,13 +30,14 @@ import (
 
 	"github.com/scionproto/scion/go/lib/mocks/io/mock_io"
 	"github.com/scionproto/scion/go/lib/pktcls"
+	"github.com/scionproto/scion/go/lib/serrors"
 	"github.com/scionproto/scion/go/lib/xtest"
 	"github.com/scionproto/scion/go/pkg/gateway/control"
 	"github.com/scionproto/scion/go/pkg/gateway/control/mock_control"
 	"github.com/scionproto/scion/go/pkg/gateway/dataplane"
 )
 
-func TestIPReader(t *testing.T) {
+func TestIPForwarderRun(t *testing.T) {
 	t.Run("nil routing table", func(t *testing.T) {
 		t.Parallel()
 		ctrl := gomock.NewController(t)
@@ -60,13 +62,93 @@ func TestIPReader(t *testing.T) {
 		assert.Error(t, err)
 	})
 
+	t.Run("fragmented packets", func(t *testing.T) {
+		testCases := map[string]struct {
+			input func(*testing.T) gopacket.Packet
+		}{
+			"ipv4 middle fragment": {
+				input: func(t *testing.T) gopacket.Packet {
+					buf, opts := gopacket.NewSerializeBuffer(), gopacket.SerializeOptions{}
+					err := gopacket.SerializeLayers(buf, opts,
+						&layers.IPv4{
+							Version: 4,
+							TTL:     20,
+							IHL:     5,
+							Length:  20,
+							SrcIP:   net.IPv4(1, 1, 1, 1),
+							DstIP:   net.IPv4(2, 2, 2, 2),
+							Flags:   layers.IPv4MoreFragments,
+						},
+					)
+					require.NoError(t, err)
+					return gopacket.NewPacket(buf.Bytes(), layers.LayerTypeIPv4,
+						gopacket.DecodeOptions{NoCopy: true, Lazy: true})
+				},
+			},
+			"ipv4 last fragment": {
+				input: func(t *testing.T) gopacket.Packet {
+					buf, opts := gopacket.NewSerializeBuffer(), gopacket.SerializeOptions{}
+					err := gopacket.SerializeLayers(buf, opts,
+						&layers.IPv4{
+							Version:    4,
+							TTL:        20,
+							IHL:        5,
+							Length:     20,
+							SrcIP:      net.IPv4(1, 1, 1, 1),
+							DstIP:      net.IPv4(2, 2, 2, 2),
+							FragOffset: 64,
+						},
+					)
+					require.NoError(t, err)
+					return gopacket.NewPacket(buf.Bytes(), layers.LayerTypeIPv4,
+						gopacket.DecodeOptions{NoCopy: true, Lazy: true})
+				},
+			},
+		}
+
+		for name, tc := range testCases {
+			name, tc := name, tc
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				ctrl := gomock.NewController(t)
+				defer ctrl.Finish()
+				reader := mock_io.NewMockReader(ctrl)
+
+				ipForwarder := &dataplane.IPForwarder{
+					Reader:       reader,
+					RoutingTable: mock_control.NewMockRoutingTable(ctrl),
+				}
+
+				reader.EXPECT().Read(gomock.Any()).DoAndReturn(
+					func(b []byte) (int, error) {
+						return copy(b, tc.input(t).Data()), nil
+					},
+				)
+
+				// Force IP forwarder to shut down.
+				errDone := serrors.New("done")
+				reader.EXPECT().Read(gomock.Any()).Return(0, errDone)
+
+				done := make(chan struct{})
+				go func() {
+					err := ipForwarder.Run()
+					require.True(t, errors.Is(err, errDone), err)
+					close(done)
+				}()
+
+				xtest.AssertReadReturnsBefore(t, done, time.Second)
+			})
+		}
+	})
+
 	t.Run("successful run", func(t *testing.T) {
 		t.Parallel()
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		reader := mock_io.NewMockReader(ctrl)
-		rt := dataplane.NewRoutingTable(nil, []*control.RoutingChain{
+		rt := dataplane.NewRoutingTable([]*control.RoutingChain{
 			{
 				Prefixes:        []*net.IPNet{xtest.MustParseCIDR(t, "10.0.0.0/8")},
 				TrafficMatchers: []control.TrafficMatcher{{ID: 1, Matcher: pktcls.CondTrue}},
@@ -80,13 +162,13 @@ func TestIPReader(t *testing.T) {
 		art.SetRoutingTable(rt)
 
 		sessionOne := mock_control.NewMockPktWriter(ctrl)
-		rt.AddRoute(
+		rt.SetSession(
 			1,
 			sessionOne,
 		)
 
 		sessionTwo := mock_control.NewMockPktWriter(ctrl)
-		rt.AddRoute(
+		rt.SetSession(
 			2,
 			sessionTwo,
 		)
@@ -115,20 +197,20 @@ func TestIPReader(t *testing.T) {
 		)
 		sessionTwo.EXPECT().Write(Packet(ipv6Packet))
 
-		done := make(chan struct{})
-		// Block reader forever so it doesn't busy loop reading nothing.
-		reader.EXPECT().Read(gomock.Any()).DoAndReturn(
-			func(b []byte) (int, error) { close(done); select {} },
-		)
+		// Force IP forwarder to shut down.
+		errDone := serrors.New("done")
+		reader.EXPECT().Read(gomock.Any()).Return(0, errDone)
 
 		ipForwarder := &dataplane.IPForwarder{
 			Reader:       reader,
 			RoutingTable: art,
 		}
 
+		done := make(chan struct{})
 		go func() {
 			err := ipForwarder.Run()
-			require.NoError(t, err)
+			require.True(t, errors.Is(err, errDone), err)
+			close(done)
 		}()
 
 		xtest.AssertReadReturnsBefore(t, done, time.Second)
